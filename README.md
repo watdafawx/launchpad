@@ -4,11 +4,7 @@ Small Windows tray app that replaces the normal startup list. It starts your app
 
 ## Install
 
-Download `launchpad.exe` from the [latest release](https://github.com/watdafawx/launchpad/releases/latest) and run:
-
-```
-launchpad.exe --install
-```
+Download `launchpad.exe` from the [latest release](https://github.com/watdafawx/launchpad/releases/latest) and double-click it. It asks whether to install, asks for admin rights once, and starts in the tray. (`launchpad.exe --install` does the same without the question.)
 
 To build it yourself instead: `cargo build --release`, then run `target\release\launchpad.exe --install`.
 

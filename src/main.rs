@@ -19,7 +19,11 @@ fn main() {
         Some("--install") => install::install(),
         Some("--uninstall") => install::uninstall(),
         Some("--after-update") => run_mode(true),
-        _ => run_mode(false),
+        _ => {
+            if !install::offer_if_not_installed() {
+                run_mode(false)
+            }
+        }
     }
 }
 

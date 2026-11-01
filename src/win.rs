@@ -264,6 +264,12 @@ pub fn msgbox(text: &str) {
     unsafe { MessageBoxW(null_mut(), t.as_ptr(), c.as_ptr(), MB_OK | MB_ICONINFORMATION) };
 }
 
+/// Yes/No question. True = Yes.
+pub fn confirm(text: &str) -> bool {
+    let (t, c) = (wide(text), wide("launchpad"));
+    unsafe { MessageBoxW(null_mut(), t.as_ptr(), c.as_ptr(), MB_YESNO | MB_ICONQUESTION) == IDYES }
+}
+
 /// False if another instance already holds this name. The handle is kept
 /// open for the life of the process on purpose.
 pub fn single_instance(name: &str) -> bool {

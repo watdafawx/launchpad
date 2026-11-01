@@ -41,6 +41,26 @@ pub fn uninstall() {
     ));
 }
 
+/// Double-clicked from Downloads or similar: offer to install instead of
+/// running from there. Returns true if it handled the start (caller exits).
+pub fn offer_if_not_installed() -> bool {
+    let Ok(me) = std::env::current_exe() else { return false };
+    let installed = install_dir().join("launchpad.exe");
+    if me == installed || crate::update::is_dev_build() {
+        return false;
+    }
+    let msg = if installed.exists() {
+        "launchpad is already installed. Replace it with this copy?"
+    } else {
+        "Install launchpad?\n\nIt will be copied to Program Files and start at login. \
+         You'll be asked for admin rights once."
+    };
+    if win::confirm(msg) {
+        install();
+    }
+    true
+}
+
 fn install_dir() -> PathBuf {
     PathBuf::from(std::env::var("ProgramFiles").unwrap_or_else(|_| r"C:\Program Files".into())).join("launchpad")
 }
@@ -106,11 +126,14 @@ fn do_install() -> Result<String, String> {
     r?;
 
     Ok(format!(
-        "Installed.\n\nApp: {}\nConfig: {}\n\nlaunchpad will start at your next login. \
-         Run it now from the Start menu or by running the exe above, then right-click the tray icon > Settings.",
+        "Installed and running.\n\nApp: {}\nConfig: {}\n\nRight-click the tray icon (blue arrow) > Settings to pick your apps.",
         target.display(),
         config::config_path().display()
     ))
+    .inspect(|_| {
+        // Start the tray now instead of waiting for the next login.
+        let _ = run("schtasks", &["/Run", "/TN", TASK]);
+    })
 }
 
 fn esc(s: &str) -> String {
