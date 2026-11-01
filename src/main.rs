@@ -9,6 +9,7 @@ mod startup;
 mod suggest;
 mod tray;
 mod ui;
+mod update;
 mod win;
 
 fn main() {
@@ -17,16 +18,22 @@ fn main() {
         Some("--mcp") => mcp::run(),
         Some("--install") => install::install(),
         Some("--uninstall") => install::uninstall(),
-        _ => run_mode(),
+        Some("--after-update") => run_mode(true),
+        _ => run_mode(false),
     }
 }
 
 /// Default mode (what the logon task runs): disable managed startup entries,
-/// launch the list, then sit in the tray guarding entries.
-fn run_mode() {
-    if !win::single_instance("Local\\launchpad-run") {
+/// launch the list, then sit in the tray guarding entries and checking for
+/// updates. After a self-update we only come back to the tray: the startup
+/// list already ran at login.
+fn run_mode(after_update: bool) {
+    // The old copy may still be exiting after an update; give it a moment.
+    let wait = if after_update { 15 } else { 0 };
+    if !win::single_instance_wait("Local\\launchpad-run", wait) {
         return;
     }
+    update::cleanup();
     let cfg = match config::load() {
         Ok(c) => c,
         Err(e) => {
@@ -40,10 +47,15 @@ fn run_mode() {
 
     let resident = cfg.stay_resident;
     let guard = cfg.guard;
-    let launcher = std::thread::spawn(move || launch::run(cfg));
+    let launcher = (!after_update).then(|| {
+        let c = cfg.clone();
+        std::thread::spawn(move || launch::run(c))
+    });
 
     if !resident {
-        let _ = launcher.join();
+        if let Some(l) = launcher {
+            let _ = l.join();
+        }
         return;
     }
     if guard {
@@ -57,6 +69,9 @@ fn run_mode() {
                 }
             })
         });
+    }
+    if !update::is_dev_build() {
+        update::spawn();
     }
     tray::run();
 }

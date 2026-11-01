@@ -693,6 +693,9 @@ impl Ui {
                     ui.checkbox(&mut self.cfg.guard, "Guard: keep managed entries off");
                 });
                 hint(ui, "Some apps turn their own startup entry back on after updating.\nThe guard switches it off again.");
+                ui.add_space(4.0);
+                ui.checkbox(&mut self.cfg.auto_update, "Install updates automatically");
+                hint(ui, &format!("Checks GitHub every 12 hours. You're on v{}.", env!("CARGO_PKG_VERSION")));
             });
         self.show_options = open;
     }

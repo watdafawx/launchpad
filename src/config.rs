@@ -8,13 +8,15 @@ pub struct Config {
     pub stay_resident: bool,
     /// Keep managed startup entries disabled, even if an app re-enables itself.
     pub guard: bool,
+    /// Install new GitHub releases automatically.
+    pub auto_update: bool,
     #[serde(rename = "app")]
     pub apps: Vec<App>,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Config { stay_resident: true, guard: true, apps: Vec::new() }
+        Config { stay_resident: true, guard: true, auto_update: true, apps: Vec::new() }
     }
 }
 

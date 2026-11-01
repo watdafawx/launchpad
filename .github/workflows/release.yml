@@ -1,0 +1,45 @@
+name: Release
+
+# Push a tag like v0.2.0 (matching Cargo.toml's version) to build launchpad.exe
+# and attach it, plus a zip, to a GitHub release.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Check the tag matches Cargo.toml
+        shell: pwsh
+        run: |
+          $v = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"(.+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          if ("v$v" -ne "${{ github.ref_name }}") { throw "Tag ${{ github.ref_name }} doesn't match Cargo.toml version $v" }
+      - name: Build
+        run: cargo build --release
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target\release\launchpad.exe dist\launchpad.exe
+          $v = "${{ github.ref_name }}".TrimStart('v')
+          $h = (Get-FileHash dist\launchpad.exe -Algorithm SHA256).Hash.ToLower()
+          Set-Content -Path dist\SHA256SUMS.txt -Value "$h  launchpad.exe" -NoNewline
+          Compress-Archive -Path dist\launchpad.exe, README.md, LICENSE -DestinationPath "dist\launchpad-$v-win64.zip"
+      - name: Publish
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $v = "${{ github.ref_name }}"
+          gh release view $v 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $v --title "launchpad $($v.TrimStart('v'))" --generate-notes
+          }
+          gh release upload $v dist\launchpad.exe dist\SHA256SUMS.txt "dist\launchpad-$($v.TrimStart('v'))-win64.zip" --clobber

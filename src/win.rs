@@ -270,7 +270,16 @@ pub fn single_instance(name: &str) -> bool {
     let n = wide(name);
     unsafe {
         let h = CreateMutexW(null(), 1, n.as_ptr());
-        !h.is_null() && GetLastError() != ERROR_ALREADY_EXISTS
+        if h.is_null() {
+            return false;
+        }
+        if GetLastError() == ERROR_ALREADY_EXISTS {
+            // Close it, or our handle keeps the mutex alive after the other
+            // instance exits and every retry would fail.
+            CloseHandle(h);
+            return false;
+        }
+        true
     }
 }
 
@@ -363,6 +372,20 @@ unsafe fn hicon_to_rgba(hicon: HICON) -> Option<(Vec<u8>, usize)> {
         }
     }
     Some((px, w))
+}
+
+/// Like `single_instance`, but keeps trying for up to `secs` seconds.
+pub fn single_instance_wait(name: &str, secs: u64) -> bool {
+    let end = Instant::now() + Duration::from_secs(secs);
+    loop {
+        if single_instance(name) {
+            return true;
+        }
+        if Instant::now() >= end {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
 }
 
 pub fn relaunch_elevated(arg: &str) {

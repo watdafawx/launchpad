@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Check
+        run: cargo check --all-targets
+      - name: Tests
+        run: cargo test
+      - name: Build (release)
+        run: cargo build --release
+      - name: Upload exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: launchpad-${{ github.sha }}
+          path: target/release/launchpad.exe
+          if-no-files-found: error
