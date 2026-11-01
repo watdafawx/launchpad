@@ -1,18 +1,19 @@
-//! `--install` / `--uninstall`: copy to Program Files, lock down the config
-//! folder, and register an elevated logon task (no UAC prompt at login).
+//! `--install` / `--uninstall`: per-user install, no admin rights needed.
+//! Copies the exe to %LOCALAPPDATA%\Programs\launchpad and adds a value under
+//! HKCU\...\Run so it starts at login as the normal user.
 
 use std::path::PathBuf;
 use std::process::Command;
 
+use winreg::enums::*;
+use winreg::RegKey;
+
 use crate::{config, startup, win};
 
-const TASK: &str = "launchpad";
+const NAME: &str = "launchpad";
+const RUN: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 
 pub fn install() {
-    if !win::is_elevated() {
-        win::relaunch_elevated("--install");
-        return;
-    }
     match do_install() {
         Ok(m) => win::msgbox(&m),
         Err(e) => win::msgbox(&format!("Install failed:\n{e}")),
@@ -20,21 +21,26 @@ pub fn install() {
 }
 
 pub fn uninstall() {
-    if !win::is_elevated() {
-        win::relaunch_elevated("--uninstall");
-        return;
+    if let Ok(k) = RegKey::predef(HKEY_CURRENT_USER).open_subkey_with_flags(RUN, KEY_SET_VALUE) {
+        let _ = k.delete_value(NAME);
     }
-    let _ = run("schtasks", &["/Delete", "/TN", TASK, "/F"]);
     let mut restored = 0;
+    let mut need_admin = Vec::new();
     if let Ok(cfg) = config::load() {
         for r in cfg.apps.iter().filter_map(|a| a.startup.as_ref()) {
-            if startup::set_enabled(r, true).is_ok() {
-                restored += 1;
+            match startup::set_enabled(r, true) {
+                Ok(()) => restored += 1,
+                Err(_) if r.source.is_machine() => need_admin.push((r.clone(), true)),
+                Err(_) => {}
             }
         }
     }
+    if !need_admin.is_empty() {
+        restored += need_admin.len();
+        startup::set_elevated(&need_admin);
+    }
     win::msgbox(&format!(
-        "Logon task removed and {restored} startup entries turned back on.\n\n\
+        "launchpad won't start at login any more, and {restored} startup entries were turned back on.\n\n\
          Files left in place (delete by hand if you want):\n{}\n{}",
         install_dir().display(),
         config::dir().display()
@@ -44,7 +50,9 @@ pub fn uninstall() {
 /// Double-clicked from Downloads or similar: offer to install instead of
 /// running from there. Returns true if it handled the start (caller exits).
 pub fn offer_if_not_installed() -> bool {
-    let Ok(me) = std::env::current_exe() else { return false };
+    let Ok(me) = std::env::current_exe() else {
+        return false;
+    };
     let installed = install_dir().join("launchpad.exe");
     if me == installed || crate::update::is_dev_build() {
         return false;
@@ -52,8 +60,8 @@ pub fn offer_if_not_installed() -> bool {
     let msg = if installed.exists() {
         "launchpad is already installed. Replace it with this copy?"
     } else {
-        "Install launchpad?\n\nIt will be copied to Program Files and start at login. \
-         You'll be asked for admin rights once."
+        "Install launchpad?\n\nIt will be installed for your user account and start at login. \
+         No admin rights needed."
     };
     if win::confirm(msg) {
         install();
@@ -61,24 +69,32 @@ pub fn offer_if_not_installed() -> bool {
     true
 }
 
-fn install_dir() -> PathBuf {
-    PathBuf::from(std::env::var("ProgramFiles").unwrap_or_else(|_| r"C:\Program Files".into())).join("launchpad")
+pub fn install_dir() -> PathBuf {
+    PathBuf::from(std::env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".into()))
+        .join("Programs")
+        .join("launchpad")
 }
 
 fn run(cmd: &str, args: &[&str]) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    let out = Command::new(cmd).args(args).creation_flags(CREATE_NO_WINDOW).output().map_err(|e| format!("{cmd}: {e}"))?;
+    let out = Command::new(cmd)
+        .args(args)
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .map_err(|e| format!("{cmd}: {e}"))?;
     if out.status.success() {
         Ok(())
     } else {
-        Err(format!("{cmd}: {}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
+        Err(format!(
+            "{cmd}: {}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        ))
     }
 }
 
 fn do_install() -> Result<String, String> {
-    // 1. Program Files is admin-only, so nothing else can swap the exe the
-    //    elevated task runs.
     let dir = install_dir();
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let target = dir.join("launchpad.exe");
@@ -95,79 +111,55 @@ fn do_install() -> Result<String, String> {
         std::fs::copy(&me, &target).map_err(|e| format!("copy to {}: {e}", target.display()))?;
     }
 
-    // 2. Config folder: admins + SYSTEM write, users read only. Otherwise any
-    //    program could add a command for launchpad to run as admin.
-    let data = config::dir();
-    std::fs::create_dir_all(&data).map_err(|e| format!("{}: {e}", data.display()))?;
-    let d = data.to_string_lossy().into_owned();
-    run(
-        "icacls",
-        &[&d, "/inheritance:r", "/grant:r", "*S-1-5-32-544:(OI)(CI)F", "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-545:(OI)(CI)RX", "/T", "/Q"],
-    )?;
+    config::migrate_legacy();
     if !config::config_path().exists() {
         config::save(&config::Config::default())?;
     }
 
-    // 3. Logon task, highest privileges, normal priority (the default 7 would
-    //    make every launched app start at below-normal priority).
-    let user = format!(
-        "{}\\{}",
-        std::env::var("USERDOMAIN").unwrap_or_default(),
-        std::env::var("USERNAME").unwrap_or_default()
-    );
-    let xml = TASK_XML.replace("{user}", &esc(&user)).replace("{exe}", &esc(&target.to_string_lossy()));
-    let xml_path = std::env::temp_dir().join("launchpad-task.xml");
-    // schtasks wants UTF-16 with a BOM.
-    let mut bytes = vec![0xFF, 0xFE];
-    bytes.extend(xml.encode_utf16().flat_map(|c| c.to_le_bytes()));
-    std::fs::write(&xml_path, bytes).map_err(|e| e.to_string())?;
-    let r = run("schtasks", &["/Create", "/TN", TASK, "/XML", &xml_path.to_string_lossy(), "/F"]);
-    let _ = std::fs::remove_file(&xml_path);
-    r?;
+    let (k, _) = RegKey::predef(HKEY_CURRENT_USER)
+        .create_subkey(RUN)
+        .map_err(|e| format!("Run key: {e}"))?;
+    k.set_value(NAME, &format!("\"{}\"", target.display()))
+        .map_err(|e| format!("Run key: {e}"))?;
+
+    let legacy = remove_legacy_offer();
+
+    // Start the tray now instead of waiting for the next login.
+    let _ = Command::new(&target).spawn();
 
     Ok(format!(
-        "Installed and running.\n\nApp: {}\nConfig: {}\n\nRight-click the tray icon (blue arrow) > Settings to pick your apps.",
+        "Installed and running.\n\nApp: {}\nConfig: {}\n\nRight-click the tray icon (blue arrow) > Settings to pick your apps.{legacy}",
         target.display(),
         config::config_path().display()
     ))
-    .inspect(|_| {
-        // Start the tray now instead of waiting for the next login.
-        let _ = run("schtasks", &["/Run", "/TN", TASK]);
-    })
 }
 
-fn esc(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+/// Older versions installed to Program Files with an elevated logon task.
+/// Removing that task needs admin once.
+fn remove_legacy_offer() -> &'static str {
+    if run("schtasks", &["/Query", "/TN", NAME]).is_err() {
+        return "";
+    }
+    if win::confirm(
+        "An older launchpad install (Program Files + an admin logon task) is still registered.\n\n\
+         Remove it now? Windows will ask for admin rights once.",
+    ) {
+        win::relaunch_elevated("--remove-legacy");
+        "\n\nThe old install is being removed."
+    } else {
+        "\n\nThe old install is still there. Run `launchpad.exe --remove-legacy` as admin to remove it."
+    }
 }
 
-const TASK_XML: &str = r#"<?xml version="1.0" encoding="UTF-16"?>
-<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
-  <RegistrationInfo><Description>launchpad: staggered startup apps</Description></RegistrationInfo>
-  <Triggers>
-    <LogonTrigger><Enabled>true</Enabled><UserId>{user}</UserId></LogonTrigger>
-  </Triggers>
-  <Principals>
-    <Principal id="Author">
-      <UserId>{user}</UserId>
-      <LogonType>InteractiveToken</LogonType>
-      <RunLevel>HighestAvailable</RunLevel>
-    </Principal>
-  </Principals>
-  <Settings>
-    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
-    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
-    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
-    <AllowHardTerminate>true</AllowHardTerminate>
-    <StartWhenAvailable>false</StartWhenAvailable>
-    <IdleSettings><StopOnIdleEnd>false</StopOnIdleEnd><RestartOnIdle>false</RestartOnIdle></IdleSettings>
-    <AllowStartOnDemand>true</AllowStartOnDemand>
-    <Enabled>true</Enabled>
-    <Hidden>false</Hidden>
-    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
-    <Priority>4</Priority>
-  </Settings>
-  <Actions Context="Author">
-    <Exec><Command>"{exe}"</Command></Exec>
-  </Actions>
-</Task>
-"#;
+/// `--remove-legacy` (elevated): delete the old logon task and Program Files copy.
+pub fn remove_legacy() {
+    if !win::is_elevated() {
+        win::relaunch_elevated("--remove-legacy");
+        return;
+    }
+    let _ = run("schtasks", &["/Delete", "/TN", NAME, "/F"]);
+    let pf =
+        PathBuf::from(std::env::var("ProgramFiles").unwrap_or_else(|_| r"C:\Program Files".into()))
+            .join("launchpad");
+    let _ = std::fs::remove_dir_all(&pf);
+}

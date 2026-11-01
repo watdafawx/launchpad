@@ -105,13 +105,38 @@ pub fn scan() -> Vec<Item> {
     out
 }
 
-/// Disable every startup entry the config manages. Returns errors, if any.
-pub fn apply_guard(cfg: &Config) -> Vec<String> {
-    cfg.apps
-        .iter()
-        .filter_map(|a| a.startup.as_ref())
-        .filter_map(|r| set_enabled(r, false).err())
-        .collect()
+/// Disable every startup entry the config manages. Machine-wide entries that
+/// need admin are returned in `need_admin` (when given) instead of as errors.
+pub fn apply_guard(cfg: &Config, mut need_admin: Option<&mut Vec<(StartupRef, bool)>>) -> Vec<String> {
+    let mut errs = Vec::new();
+    for r in cfg.apps.iter().filter_map(|a| a.startup.as_ref()) {
+        if let Err(e) = set_enabled(r, false) {
+            match need_admin.as_deref_mut() {
+                Some(v) if r.source.is_machine() => v.push((r.clone(), false)),
+                _ => errs.push(e),
+            }
+        }
+    }
+    errs
+}
+
+/// Change machine-wide entries through one elevated helper (one UAC prompt).
+/// The list goes as hex-encoded JSON so names need no quoting.
+pub fn set_elevated(list: &[(StartupRef, bool)]) {
+    let json = serde_json::to_vec(list).unwrap_or_default();
+    let hex: String = json.iter().map(|b| format!("{b:02x}")).collect();
+    crate::win::relaunch_elevated(&format!("--set-startup {hex}"));
+}
+
+/// `--set-startup <hex json>` (elevated helper).
+pub fn set_from_arg(hex: &str) {
+    let bytes: Vec<u8> =
+        (0..hex.len() / 2).filter_map(|i| u8::from_str_radix(hex.get(i * 2..i * 2 + 2)?, 16).ok()).collect();
+    let Ok(list) = serde_json::from_slice::<Vec<(StartupRef, bool)>>(&bytes) else { return };
+    let errs: Vec<String> = list.iter().filter_map(|(r, on)| set_enabled(r, *on).err()).collect();
+    if !errs.is_empty() {
+        crate::win::msgbox(&format!("Couldn't change: {}", errs.join("; ")));
+    }
 }
 
 /// Block forever, calling `f` whenever a Run key or StartupApproved key changes.

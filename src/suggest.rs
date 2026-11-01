@@ -1,6 +1,6 @@
 //! Suggested config changes. Anything (the MCP server, other tools) can write
-//! suggestions to the user's own folder; only the elevated Settings window
-//! can apply them, and only when the user clicks Apply and then Save.
+//! suggestions to the user's own folder; only the Settings window applies
+//! them, and only when the user clicks Apply and then Save.
 
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};

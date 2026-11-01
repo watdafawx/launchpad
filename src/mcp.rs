@@ -2,9 +2,9 @@
 //!
 //! Read tools show the config, startup items and last-run log. The only write
 //! is `suggest_changes`, which files a suggestion for the user to review in
-//! Settings. The server runs without admin rights and can't touch the config
-//! itself (the config folder is admin-only), so a model can never make
-//! launchpad run something as admin without the user approving it.
+//! Settings. The server never writes the config itself, and apps marked admin
+//! always start through a UAC prompt, so nothing runs elevated without the
+//! user approving it.
 
 use std::io::{BufRead, Write};
 
