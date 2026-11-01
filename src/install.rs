@@ -64,8 +64,15 @@ fn do_install() -> Result<String, String> {
     let target = dir.join("launchpad.exe");
     let me = std::env::current_exe().map_err(|e| e.to_string())?;
     if me != target {
-        std::fs::copy(&me, &target)
-            .map_err(|e| format!("copy to {}: {e}\n(Quit launchpad from the tray first if it's running.)", target.display()))?;
+        // The installed exe may be running (tray, Settings, an MCP client).
+        // It can't be overwritten but it can be renamed; the next start
+        // deletes the .old copy.
+        if target.exists() {
+            let old = target.with_file_name("launchpad.old.exe");
+            let _ = std::fs::remove_file(&old);
+            let _ = std::fs::rename(&target, &old);
+        }
+        std::fs::copy(&me, &target).map_err(|e| format!("copy to {}: {e}", target.display()))?;
     }
 
     // 2. Config folder: admins + SYSTEM write, users read only. Otherwise any
