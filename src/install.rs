@@ -111,7 +111,7 @@ fn do_install() -> Result<String, String> {
         std::fs::copy(&me, &target).map_err(|e| format!("copy to {}: {e}", target.display()))?;
     }
 
-    config::migrate_legacy();
+    config::migrate_legacy(false);
     if !config::config_path().exists() {
         config::save(&config::Config::default())?;
     }
@@ -156,6 +156,11 @@ pub fn remove_legacy() {
     if !win::is_elevated() {
         win::relaunch_elevated("--remove-legacy");
         return;
+    }
+    // The old config folder is admin-only, so the copy at install may have
+    // failed and left a fresh empty config. Copy it over now if so.
+    if config::load().map_or(true, |c| c.apps.is_empty()) {
+        config::migrate_legacy(true);
     }
     let _ = run("schtasks", &["/Delete", "/TN", NAME, "/F"]);
     let pf =

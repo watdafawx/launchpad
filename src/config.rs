@@ -104,14 +104,18 @@ pub fn dir() -> PathBuf {
     PathBuf::from(base).join("launchpad")
 }
 
-/// Copy config.toml from the old %ProgramData% location if there's none yet.
-pub fn migrate_legacy() {
+/// Copy config.toml from the old %ProgramData% location. Only replaces an
+/// existing config when `overwrite` is set and the old one could be read.
+pub fn migrate_legacy(overwrite: bool) {
     let old = PathBuf::from(std::env::var("ProgramData").unwrap_or_else(|_| r"C:\ProgramData".into()))
         .join("launchpad")
         .join("config.toml");
-    if !config_path().exists() && old.exists() {
+    if config_path().exists() && !overwrite {
+        return;
+    }
+    if let Ok(text) = std::fs::read_to_string(old) {
         let _ = std::fs::create_dir_all(dir());
-        let _ = std::fs::copy(old, config_path());
+        let _ = std::fs::write(config_path(), text);
     }
 }
 
