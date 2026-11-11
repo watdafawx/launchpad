@@ -115,8 +115,13 @@ fn wait_cpu(pct: f32, max: Duration) -> bool {
     false
 }
 
-/// Split a command line into (program, arguments). Handles quoted paths and
-/// unquoted paths with spaces that end in .exe.
+/// Extensions that end a program path (not an argument), longest first so
+/// ".lnk" isn't cut short by a ".l" style prefix.
+const PROGRAMS: [&str; 5] = [".exe", ".lnk", ".url", ".bat", ".cmd"];
+
+/// Split a command line into (program, arguments). Handles quoted paths,
+/// unquoted paths with spaces that end in a program extension, and a bare
+/// existing file (`.lnk` shortcuts in the Startup folder, for example).
 pub fn split_first(cmd: &str) -> (String, String) {
     let c = cmd.trim();
     if let Some(r) = c.strip_prefix('"') {
@@ -125,11 +130,19 @@ pub fn split_first(cmd: &str) -> (String, String) {
             None => (r.to_string(), String::new()),
         };
     }
+    // No arguments: the whole line is the file, whatever the extension.
+    if Path::new(c).is_file() {
+        return (c.to_string(), String::new());
+    }
     let lower = c.to_ascii_lowercase();
-    if let Some(i) = lower.find(".exe") {
-        let end = i + 4;
-        if end == c.len() || c.as_bytes()[end] == b' ' {
-            return (c[..end].to_string(), c[end..].trim().to_string());
+    for ext in PROGRAMS {
+        let mut from = 0;
+        while let Some(i) = lower[from..].find(ext) {
+            let end = from + i + ext.len();
+            if end == c.len() || c.as_bytes()[end] == b' ' {
+                return (c[..end].to_string(), c[end..].trim().to_string());
+            }
+            from = end;
         }
     }
     match c.find(' ') {
@@ -227,6 +240,22 @@ mod tests {
         assert_eq!(split_first(r"C:\Program Files\x\a.exe --min"), (r"C:\Program Files\x\a.exe".into(), "--min".into()));
         assert_eq!(split_first(r"C:\x\a.exe"), (r"C:\x\a.exe".into(), "".into()));
         assert_eq!(split_first("shell:AppsFolder\\X!App"), ("shell:AppsFolder\\X!App".into(), "".into()));
+    }
+
+    #[test]
+    fn split_unquoted_spaces_in_shortcut() {
+        // Startup-folder entries are .lnk paths with spaces, added unquoted.
+        let lnk = r"C:\Users\u\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\ShareX.lnk";
+        assert_eq!(split_first(lnk), (lnk.to_string(), "".into()));
+        assert_eq!(split_first(&format!("{lnk} --flag")), (lnk.to_string(), "--flag".into()));
+        assert_eq!(
+            split_first(r"C:\a b\run.cmd /q"),
+            (r"C:\a b\run.cmd".into(), "/q".into())
+        );
+        // And the shortcut must be opened by the shell, not CreateProcess.
+        let (file, rest) = split_first(lnk);
+        assert!(is_shell_target(&file, lnk));
+        assert_eq!(rest, "");
     }
 
     #[test]

@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 
 use eframe::egui::{self, Align, Color32, Layout, RichText, Sense, Stroke, Vec2};
 
-use crate::config::{self, App, Config, StartupRef};
+use crate::config::{self, App, Config, Source, StartupRef};
 use crate::startup::{self, Item};
 use crate::suggest::{self, Suggestion};
 
@@ -673,7 +673,13 @@ impl Ui {
 
         if let Some(it) = pick {
             let name = self.unique_name(&display_name(&it.r.name));
-            self.add(App { name, command: it.command, startup: Some(it.r), ..App::default() });
+            // Startup-folder items are bare .lnk paths: quote them so paths with
+            // spaces aren't cut in half when they're launched.
+            let command = match it.r.source {
+                Source::UserFolder | Source::CommonFolder => format!("\"{}\"", it.command),
+                _ => it.command,
+            };
+            self.add(App { name, command, startup: Some(it.r), ..App::default() });
         }
     }
 
