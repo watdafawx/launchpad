@@ -4,16 +4,18 @@ Small Windows tray app that replaces the normal startup list. It starts your app
 
 ## Install
 
-Download `launchpad.exe` from the [latest release](https://github.com/watdafawx/launchpad/releases/latest) and double-click it. It asks whether to install, asks for admin rights once, and starts in the tray. (`launchpad.exe --install` does the same without the question.)
+Download `launchpad.exe` from the [latest release](https://github.com/watdafawx/launchpad/releases/latest) and double-click it. It asks whether to install, then starts in the tray. No admin rights needed. (`launchpad.exe --install` does the same without the question.)
 
 To build it yourself instead: `cargo build --release`, then run `target\release\launchpad.exe --install`.
 
-`--install` asks for admin once, then:
-- copies the exe to `C:\Program Files\launchpad\`
-- creates `C:\ProgramData\launchpad\` (admins can write, users can only read)
-- registers a logon task with highest privileges, so you get no UAC prompt at login
+`--install` installs for your user only:
+- copies the exe to `%LOCALAPPDATA%\Programs\launchpad\`
+- keeps config and logs in `%LOCALAPPDATA%\launchpad\`
+- adds a `launchpad` value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, so it starts at login as you, not elevated
 
-To remove it, run `launchpad.exe --uninstall`. That deletes the task and turns the managed startup entries back on.
+If an older version (Program Files + admin logon task) is installed, the installer offers to remove it. That needs admin once. Your old config is copied over.
+
+To remove it, run `launchpad.exe --uninstall`. That removes the Run entry and turns the managed startup entries back on.
 
 ## Use
 
@@ -24,26 +26,26 @@ Right-click the tray icon and pick **Settings…**. In the **Windows startup ite
 | After | Wait until this other app has been started (or skipped) |
 | Delay | Seconds to wait, counted from "After" (or from login) |
 | CPU below | Wait until total CPU stays under this % for 3 s (gives up after 90 s) |
-| Admin | Start elevated. Everything else starts as your normal user, not elevated. |
+| Admin | Start elevated. Windows shows a UAC prompt for it at each login. Everything else starts as your normal user. |
 | Process | Exe name used to skip the app when it's already running. Leave empty to auto-detect. |
 
-The log of each run is in `C:\ProgramData\launchpad\last-run.log`. You can also open it from the tray menu or read it at the bottom of Settings.
+The log of each run is in `%LOCALAPPDATA%\launchpad\last-run.log`. You can also open it from the tray menu or read it at the bottom of Settings.
 
 ## MCP server (for AI assistants)
 
-`launchpad.exe --mcp` runs a Model Context Protocol server over stdio. Assistants can read the setup, startup items and last-run log. They can also file **suggestions**, which show up in Settings for you to Apply or Dismiss. The server runs without admin rights and can't edit the config, so nothing changes until you approve it and Save.
+`launchpad.exe --mcp` runs a Model Context Protocol server over stdio. Assistants can read the setup, startup items and last-run log. They can also file **suggestions**, which show up in Settings for you to Apply or Dismiss. The server never edits the config, so nothing changes until you approve it and Save.
 
 Claude Code:
 
 ```
-claude mcp add --scope user launchpad -- "C:\Program Files\launchpad\launchpad.exe" --mcp
+claude mcp add --scope user launchpad -- "%LOCALAPPDATA%\Programs\launchpad\launchpad.exe" --mcp
 ```
 
 Tools: `get_setup`, `list_startup_items`, `get_last_run_log`, `list_suggestions`, `suggest_changes`, `withdraw_suggestion`. Suggestions are stored in `%LOCALAPPDATA%\launchpad\suggestions.json`.
 
 ## Updates
 
-launchpad checks GitHub for a new release a minute after it starts, then every 12 hours. It downloads `launchpad.exe`, checks it against the release's `SHA256SUMS.txt`, swaps it in and restarts in the tray. The restart doesn't run your startup list again. To install updates yourself instead, turn off auto-update in Settings > Options and use the tray menu's **Check for updates**. Each check is logged to `C:\ProgramData\launchpad\update.log`.
+launchpad checks GitHub for a new release a minute after it starts, then every 12 hours. It downloads `launchpad.exe`, checks it against the release's `SHA256SUMS.txt`, swaps it in and restarts in the tray. The restart doesn't run your startup list again. To install updates yourself instead, turn off auto-update in Settings > Options and use the tray menu's **Check for updates**. Each check is logged to `%LOCALAPPDATA%\launchpad\update.log`.
 
 To cut a release, bump `version` in `Cargo.toml`, commit, and push a matching tag (`v0.2.0`). The Release workflow builds the exe and publishes it.
 
@@ -51,4 +53,5 @@ To cut a release, bump `version` in `Cargo.toml`, commit, and push a matching ta
 
 - The tray process uses about 2–3 MB of private memory. The Settings window is a separate process that only runs while it's open.
 - Commands can be a full command line, a `.lnk` path or a `shell:AppsFolder\…` URI. `%VARS%` are expanded.
-- The config can only be edited by admins. Otherwise any program could add a command for launchpad to run with admin rights.
+- launchpad never runs elevated itself. Apps marked Admin start through a normal UAC prompt, so nothing gets admin rights without you approving it.
+- Turning off an all-users startup entry (HKLM or the common Startup folder) needs admin, so Settings asks once when you save.

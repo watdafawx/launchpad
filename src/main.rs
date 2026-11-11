@@ -18,6 +18,8 @@ fn main() {
         Some("--mcp") => mcp::run(),
         Some("--install") => install::install(),
         Some("--uninstall") => install::uninstall(),
+        Some("--remove-legacy") => install::remove_legacy(),
+        Some("--set-startup") => startup::set_from_arg(&std::env::args().nth(2).unwrap_or_default()),
         Some("--after-update") => run_mode(true),
         _ => {
             if !install::offer_if_not_installed() {
@@ -27,7 +29,7 @@ fn main() {
     }
 }
 
-/// Default mode (what the logon task runs): disable managed startup entries,
+/// Default mode (what the Run entry starts at login): disable managed startup entries,
 /// launch the list, then sit in the tray guarding entries and checking for
 /// updates. After a self-update we only come back to the tray: the startup
 /// list already ran at login.
@@ -46,7 +48,7 @@ fn run_mode(after_update: bool) {
         }
     };
     if cfg.guard {
-        startup::apply_guard(&cfg);
+        startup::apply_guard(&cfg, None);
     }
 
     let resident = cfg.stay_resident;
@@ -68,7 +70,7 @@ fn run_mode(after_update: bool) {
                 // Re-read so changes made in Settings apply without a restart.
                 if let Ok(c) = config::load() {
                     if c.guard {
-                        startup::apply_guard(&c);
+                        startup::apply_guard(&c, None);
                     }
                 }
             })

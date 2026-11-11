@@ -77,6 +77,11 @@ pub enum Source {
 }
 
 impl Source {
+    /// Machine-wide entries: changing them needs admin.
+    pub fn is_machine(self) -> bool {
+        matches!(self, Source::HklmRun | Source::HklmRun32 | Source::CommonFolder)
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Source::HkcuRun => "Run (user)",
@@ -88,15 +93,30 @@ impl Source {
     }
 }
 
-/// %ProgramData%\launchpad. Install locks it to admins so a non-elevated
-/// program can't add commands that launchpad would run as admin.
+/// %LOCALAPPDATA%\launchpad. Per-user: launchpad runs as the normal user, and
+/// apps marked admin still need the user to accept a UAC prompt each time.
 pub fn dir() -> PathBuf {
     #[cfg(debug_assertions)]
     if let Ok(d) = std::env::var("LAUNCHPAD_DIR") {
         return PathBuf::from(d);
     }
-    let base = std::env::var("ProgramData").unwrap_or_else(|_| r"C:\ProgramData".into());
+    let base = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".into());
     PathBuf::from(base).join("launchpad")
+}
+
+/// Copy config.toml from the old %ProgramData% location. Only replaces an
+/// existing config when `overwrite` is set and the old one could be read.
+pub fn migrate_legacy(overwrite: bool) {
+    let old = PathBuf::from(std::env::var("ProgramData").unwrap_or_else(|_| r"C:\ProgramData".into()))
+        .join("launchpad")
+        .join("config.toml");
+    if config_path().exists() && !overwrite {
+        return;
+    }
+    if let Ok(text) = std::fs::read_to_string(old) {
+        let _ = std::fs::create_dir_all(dir());
+        let _ = std::fs::write(config_path(), text);
+    }
 }
 
 pub fn config_path() -> PathBuf {

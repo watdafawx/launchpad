@@ -83,7 +83,6 @@ struct Ui {
     items: Vec<Item>,
     log: String,
     status: Option<(String, bool)>, // (text, is_error)
-    elevated: bool,
     selected: Option<usize>,
     view: View,
     search: String,
@@ -116,7 +115,6 @@ impl Ui {
             items: startup::scan(),
             log: read_log(),
             status,
-            elevated: crate::win::is_elevated(),
             view,
             search: String::new(),
             show_log: false,
@@ -270,15 +268,24 @@ impl Ui {
             return;
         }
         let mut errs = Vec::new();
+        let mut need_admin = Vec::new();
         // Entries no longer managed go back on, the way Windows had them.
         let now: Vec<_> = self.cfg.apps.iter().filter_map(|a| a.startup.clone()).collect();
         for r in self.saved.apps.iter().filter_map(|a| a.startup.as_ref()) {
             if !now.contains(r) {
-                errs.extend(startup::set_enabled(r, true).err());
+                match startup::set_enabled(r, true) {
+                    Err(_) if r.source.is_machine() => need_admin.push((r.clone(), true)),
+                    Err(e) => errs.push(e),
+                    Ok(()) => {}
+                }
             }
         }
         if self.cfg.guard {
-            errs.extend(startup::apply_guard(&self.cfg));
+            errs.extend(startup::apply_guard(&self.cfg, Some(&mut need_admin)));
+        }
+        // All-users entries need admin: one UAC prompt covers them all.
+        if !need_admin.is_empty() {
+            startup::set_elevated(&need_admin);
         }
         self.saved = self.cfg.clone();
         self.items = startup::scan();
@@ -324,10 +331,6 @@ impl Ui {
                 }
             });
         });
-        if !self.elevated {
-            ui.add_space(2.0);
-            banner(ui, WARN, "Opened without admin rights, so changes can't be saved. Open Settings from the tray icon instead.");
-        }
         let n = self.suggestions.len();
         if n > 0 && self.view != View::Suggestions {
             ui.add_space(2.0);
@@ -542,7 +545,7 @@ impl Ui {
             section(ui, "Run as");
             ui.radio_value(&mut a.admin, false, "Me (recommended)");
             ui.radio_value(&mut a.admin, true, "Administrator");
-            hint(ui, "Only pick Administrator for apps that need it, like Process Lasso or fan tools.");
+            hint(ui, "Only pick Administrator for apps that need it, like Process Lasso or fan tools. Windows asks you to approve each one at login.");
 
             ui.add_space(8.0);
             egui::CollapsingHeader::new("Advanced").id_salt("adv").show(ui, |ui| {
@@ -827,18 +830,6 @@ fn section(ui: &mut egui::Ui, title: &str) {
 
 fn hint(ui: &mut egui::Ui, text: &str) {
     ui.label(RichText::new(text).small().weak());
-}
-
-fn banner(ui: &mut egui::Ui, color: Color32, text: &str) {
-    egui::Frame::default()
-        .fill(color.gamma_multiply(0.15))
-        .stroke(Stroke::new(1.0_f32, color.gamma_multiply(0.6)))
-        .corner_radius(6.0)
-        .inner_margin(egui::Margin::symmetric(10, 6))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.label(RichText::new(text).color(color));
-        });
 }
 
 /// One-line description of an app's rules for the list.
